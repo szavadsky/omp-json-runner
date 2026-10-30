@@ -1,0 +1,3 @@
+Smoke-test notes fixture.
+Line two: the runner substitutes $1 and $2 with file contents.
+Line three: output is validated JSON.

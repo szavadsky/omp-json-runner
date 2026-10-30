@@ -1,0 +1,2 @@
+Hello from omp-json-runner!
+This is the first smoke-test fixture.
