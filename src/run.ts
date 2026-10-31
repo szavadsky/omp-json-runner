@@ -299,7 +299,9 @@ async function runNoTools(args: {
 		systemPrompt: [system],
 		messages: [
 			{ role: "user" as const, content: staticPrefix, timestamp: Date.now() },
-			{ role: "user" as const, content: dynamicSuffix, timestamp: Date.now() },
+			...(dynamicSuffix
+				? [{ role: "user" as const, content: dynamicSuffix, timestamp: Date.now() }]
+				: []),
 		],
 	};
 	const suffix = context.messages[context.messages.length - 1];
