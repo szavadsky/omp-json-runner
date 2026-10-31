@@ -79,20 +79,38 @@ Without the marker the whole prompt is sent as one user message.
 ## CLI usage
 
 ```sh
-bun src/cli.ts <spec.md> <out.json> <input1> [<input2> ...]
+bun src/cli.ts [--model <pattern>] <spec.md> <out.json> <input1> [<input2> ...]
 ```
 
 - Reads each input file as UTF-8 text, substitutes `$N` into `system` and the
   user prompt, runs the agent, validates the final JSON against the spec's
   `output` schema, writes pretty-printed JSON to `<out.json>`, and also
   prints it to stdout.
+- `--model <pattern>`: optional override for the spec frontmatter `model:`
+  key. Allows reusing a single spec file across multiple models without duplicating
+  it (e.g. for consensus or ensemble evaluations). Supports bare role names,
+  `@role` aliases, `provider/model` patterns, and optional `:thinking`
+  suffixes (e.g. `google-antigravity/gemini-3.8-flash:high`).
 - Writes one telemetry line to stderr per run:
   `omp-json-runner usage {"input":N,"output":N,"cacheRead":N,"cacheWrite":N}`
   (best-effort token counts; `0` when unavailable).
 - Exit codes: `0` success (final JSON on stdout), `2` usage error
-  (fewer than 3 CLI args, or `--help` prints usage), `1` run failure
+  (unknown flags, fewer than 3 positional args, or `--help` prints usage), `1` run failure
   (message to stderr).
 
+### Consensus / ensemble example
+
+Run the same spec across multiple models and merge or compare the outputs:
+
+```sh
+# Run 1: Gemini 3.8 Flash
+bun src/cli.ts --model google-antigravity/gemini-3.8-flash:high \
+  examples/echo.md /tmp/echo-gemini.json examples/inputs/hello.txt
+
+# Run 2: OpenCode Beam
+bun src/cli.ts --model opencode-go/beam-free:auto \
+  examples/echo.md /tmp/echo-beam.json examples/inputs/hello.txt
+```
 ## Tools / yield semantics
 
 - The agent gets exactly the spec's `tools` allowlist (default: none).
@@ -129,6 +147,5 @@ Smoke runs need omp auth (API keys via your omp config, typically under
 - `smol` — cheap/fast model alias resolved via omp `Settings`
   (model aliases/roles come from your omp configuration).
 - `haiku` — used by `cachecheck.md`. To test against a different
-  Haiku-class model, copy the spec and change its `model:` frontmatter
-  key, e.g. `cp examples/cachecheck.md /tmp/cachecheck.local.md`
-  and edit the `model:` line.
+  model, pass `--model <pattern>` on the command line (or copy the spec
+  and edit the `model:` frontmatter line).

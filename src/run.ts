@@ -50,6 +50,7 @@ export interface RunOptions {
 	outPath: string;
 	inputPaths: string[];
 	cwd?: string;
+	modelOverride?: string;
 }
 
 export interface RunResult {
@@ -397,6 +398,13 @@ async function runNoTools(args: {
 export async function run(options: RunOptions): Promise<RunResult> {
 	const cwd = options.cwd ?? process.cwd();
 	const spec = await loadSpec(options.specPath);
+	if (options.modelOverride !== undefined) {
+		const trimmed = options.modelOverride.trim();
+		if (!trimmed) {
+			throw new UsageError(`spec ${options.specPath}: --model override cannot be empty`);
+		}
+		spec.model = trimmed;
+	}
 	if (options.inputPaths.length !== spec.args) {
 		throw new UsageError(
 			`spec ${options.specPath}: expected ${spec.args} input(s), got ${options.inputPaths.length}`,

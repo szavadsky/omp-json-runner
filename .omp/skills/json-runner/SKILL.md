@@ -13,7 +13,7 @@ not the caller.
 
 ```sh
 bun install          # once, in the runner checkout
-bun src/cli.ts <spec.md> <out.json> <input1> [<input2> ...]
+bun src/cli.ts [--model <pattern>] <spec.md> <out.json> <input1> [<input2> ...]
 ```
 
 Exit `0` writes pretty JSON to `<out.json>` (also stdout) plus one
@@ -34,6 +34,6 @@ Markdown with YAML frontmatter plus a body:
 Put shared instructions and reference material before the
 `<!-- CACHE_BOUNDARY -->` line and the `$N` inputs after it: the runner
 sends two user messages so provider-side automatic caching reuses the
-static prefix across runs. Override `model:` per run by copying the spec.
+Override `model:` per run with `--model <pattern>` (or by copying the spec).
 
 See `README.md` and `examples/` for the full contract and a smoke test.

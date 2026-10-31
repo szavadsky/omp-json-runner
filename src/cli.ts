@@ -1,24 +1,75 @@
 #!/usr/bin/env bun
 import { run, UsageError } from "./run.js";
 
-const USAGE = "usage: bun src/cli.ts <spec.md> <out.json> <input1> [<input2>...]";
+const USAGE = "usage: bun src/cli.ts [--model <pattern>] <spec.md> <out.json> <input1> [<input2>...]";
+
+const HELP = `${USAGE}
+
+Arguments:
+  <spec.md>            Path to spec file with YAML frontmatter
+  <out.json>           Destination for validated JSON output
+  <input1> ...         Input file paths (count must match spec 'args')
+
+Options:
+  --model <pattern>    Override model specified in spec frontmatter
+  -h, --help           Show this help message
+`;
 
 const argv = process.argv.slice(2);
 
-if (argv.length > 0 && (argv[0] === "--help" || argv[0] === "-h")) {
-  console.log(USAGE);
-  process.exit(0);
+let modelOverride: string | undefined;
+let i = 0;
+while (i < argv.length) {
+  const arg = argv[i];
+  if (arg === "--help" || arg === "-h") {
+    console.log(HELP);
+    process.exit(0);
+  }
+  if (arg === "--model") {
+    i++;
+    if (i >= argv.length || !argv[i].trim()) {
+      console.error("error: --model requires a non-empty pattern argument");
+      console.error(USAGE);
+      process.exit(2);
+    }
+    modelOverride = argv[i].trim();
+    i++;
+    continue;
+  }
+  if (arg.startsWith("--model=")) {
+    const val = arg.slice("--model=".length).trim();
+    if (!val) {
+      console.error("error: --model requires a non-empty pattern argument");
+      console.error(USAGE);
+      process.exit(2);
+    }
+    modelOverride = val;
+    i++;
+    continue;
+  }
+  if (arg === "--") {
+    i++;
+    break;
+  }
+  if (arg.startsWith("-")) {
+    console.error(`error: unknown option ${arg}`);
+    console.error(USAGE);
+    process.exit(2);
+  }
+  break;
 }
 
-if (argv.length < 3) {
+const positionalArgs = argv.slice(i);
+
+if (positionalArgs.length < 3) {
   console.error(USAGE);
   process.exit(2);
 }
 
-const [specPath, outPath, ...inputPaths] = argv as [string, string, ...string[]];
+const [specPath, outPath, ...inputPaths] = positionalArgs as [string, string, ...string[]];
 
 try {
-  const result = await run({ specPath, outPath, inputPaths });
+  const result = await run({ specPath, outPath, inputPaths, modelOverride });
   console.log(JSON.stringify(result.data));
   process.exit(0);
 } catch (err) {
