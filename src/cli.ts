@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { run } from "./run.js";
+import { run, UsageError } from "./run.js";
 
 const USAGE = "usage: bun src/cli.ts <spec.md> <out.json> <input1> [<input2>...]";
 
@@ -23,5 +23,5 @@ try {
   process.exit(0);
 } catch (err) {
   console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
-  process.exit(1);
+  process.exit(err instanceof UsageError ? 2 : 1);
 }

@@ -50,11 +50,12 @@ Frontmatter keys:
 
 | Key      | Required | Meaning                                                                                          |
 |----------|----------|--------------------------------------------------------------------------------------------------|
-| `model`  | yes      | Model pattern/alias resolved via omp `Settings` (e.g. `smol`, `@smol`, `anthropic/claude-haiku-4-5`). |
-| `tools`  | no       | Allowed tools: CSV string, string array, or `null`. Default `[]` = **no tools** (note: this differs from the omp agent default, which enables tools). Names are normalized like omp (`read`, `grep`, `glob`, …). |
+| `model`  | yes      | Model pattern/alias resolved via omp `Settings`: bare role names (`smol`, `haiku`), `@`-prefixed aliases (`@smol`), or full `provider/model` patterns (`anthropic/claude-haiku-4-5`). |
+| `tools`  | no       | Allowed tools: CSV string, string array, or `null`. Default `[]` = **no tools** (note: this differs from the omp agent default, which enables tools). Names are normalized like omp (`read`, `grep`, `glob`, …) and rejected if unknown. |
 | `system` | yes      | System prompt string. Supports `$N` substitution like the body.                                  |
 | `args`   | yes      | Integer ≥ 1: how many file inputs the spec takes. CLI must pass exactly this many.               |
-| `output` | yes      | JSON Schema (object) the model's final JSON is validated against.                                |
+| `output` | yes      | JSON Schema (object) the model's final JSON is validated against. Keys are kept verbatim (no kebab→camel normalization). |
+| `thinking` / `thinkingLevel` | no | Optional thinking-level hint string (e.g. `high`); `thinkingLevel` wins when both are set. |
 
 Body = the **user prompt** (required, non-empty). It also supports `$N`
 substitution: `$1`..`$N` are replaced with the contents of input files;
@@ -85,20 +86,26 @@ bun src/cli.ts <spec.md> <out.json> <input1> [<input2> ...]
   user prompt, runs the agent, validates the final JSON against the spec's
   `output` schema, writes pretty-printed JSON to `<out.json>`, and also
   prints it to stdout.
+- Writes one telemetry line to stderr per run:
+  `omp-json-runner usage {"input":N,"output":N,"cacheRead":N,"cacheWrite":N}`
+  (best-effort token counts; `0` when unavailable).
 - Exit codes: `0` success (final JSON on stdout), `2` usage error
-  (wrong arg count), `1` run failure (message to stderr).
+  (fewer than 3 CLI args, or `--help` prints usage), `1` run failure
+  (message to stderr).
 
 ## Tools / yield semantics
 
 - The agent gets exactly the spec's `tools` allowlist (default: none).
-  With no tools the model must answer directly; with tools (e.g.
+  With no tools (`examples/echo.md`, `examples/cachecheck.md`) the model must
+  answer directly with a single JSON object; with tools (e.g.
   `examples/summarize.md`) it may call them before answering.
-- The run ends when the model **yields** (calls the yield/show-result tool
-  with its final answer) instead of calling a tool. The yielded text must
-  parse as JSON (repair attempted) and validate against the spec schema.
-- After a yield whose JSON is invalid, the runner issues **one reminder
-  turn** asking for corrected JSON; if the next yield is still invalid,
-  the run fails.
+- With tools, the run ends when the model **yields** (calls the yield tool
+  with its final answer). The yield tool validates `data` against the output
+  schema and retries on failure; if no successful yield happens during the
+  initial turn, the runner issues **one reminder turn** ("You stopped without
+  calling yield...") and fails hard if the model still has not yielded. The
+  yielded value must parse as JSON (repair attempted) and validate against
+  the spec schema.
 
 ## Smoke test
 

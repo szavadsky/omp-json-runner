@@ -1,5 +1,7 @@
+import { parseArrayOrCSV } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
+import { BUILTIN_TOOL_NAMES, normalizeToolNames } from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
+import { buildOutputValidator } from "@oh-my-pi/pi-coding-agent/tools/output-schema-validator";
 import { parseFrontmatter } from "@oh-my-pi/pi-utils";
-import { normalizeToolNames } from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
 import { z } from "zod";
 
 export interface RunnerSpec {
@@ -10,6 +12,7 @@ export interface RunnerSpec {
 	args: number;
 	output: unknown;
 	rawPath: string;
+	thinkingLevel?: string;
 }
 
 export const CACHE_BOUNDARY = "<!-- CACHE_BOUNDARY -->";
@@ -22,30 +25,69 @@ const SpecFrontmatter = z.object({
 	output: z
 		.record(z.unknown())
 		.refine(v => !Array.isArray(v), { message: "output must be a JSON Schema object" }),
+	thinking: z.string().min(1).optional(),
+	thinkingLevel: z.string().min(1).optional(),
 });
 
-function normalizeTools(raw: string | string[] | null | undefined): string[] {
+/** Top-level frontmatter keys after normalization; `output` keeps its keys verbatim. */
+const KNOWN_TOP_LEVEL_KEYS = new Set([
+	"model",
+	"tools",
+	"system",
+	"args",
+	"output",
+	"thinking",
+	"thinkingLevel",
+]);
+
+function kebabToCamel(key: string): string {
+	return key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+}
+
+/**
+ * Normalize ONLY top-level frontmatter keys (kebab-case to camelCase for
+ * known keys). Nested values — including the `output` schema — pass through
+ * verbatim.
+ */
+function normalizeTopLevelKeys(frontmatter: Record<string, unknown>): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(frontmatter)) {
+		const camel = kebabToCamel(key);
+		out[KNOWN_TOP_LEVEL_KEYS.has(camel) ? camel : key] = value;
+	}
+	return out;
+}
+
+function normalizeTools(raw: string | string[] | null | undefined, path: string): string[] {
 	if (raw == null) return [];
-	const names = (typeof raw === "string" ? raw.split(",") : raw)
-		.map(s => s.trim())
-		.filter(s => s.length > 0);
-	return normalizeToolNames(names);
+	const names = (parseArrayOrCSV(raw) ?? []).map(s => s.trim()).filter(s => s.length > 0);
+	const normalized = normalizeToolNames(names);
+	const known = new Set<string>(BUILTIN_TOOL_NAMES);
+	const unknown = normalized.filter(name => !known.has(name));
+	if (unknown.length > 0) {
+		throw new Error(`spec ${path}: unknown tool(s): ${unknown.join(", ")}`);
+	}
+	return normalized;
 }
 
 export async function loadSpec(path: string): Promise<RunnerSpec> {
 	const content = await Bun.file(path).text();
-	const { frontmatter, body } = parseFrontmatter(content);
-	const parsed = SpecFrontmatter.parse(frontmatter);
+	const { frontmatter, body } = parseFrontmatter(content, { location: path, level: "fatal", rawKeys: true });
+	const parsed = SpecFrontmatter.parse(normalizeTopLevelKeys(frontmatter));
+	const { error } = buildOutputValidator(parsed.output);
+	if (error) throw new Error(`spec ${path}: invalid output schema: ${error}`);
 	const user = body.trim();
 	if (!user) throw new Error(`spec ${path}: body (user prompt) must be non-empty`);
+	const thinkingLevel = parsed.thinkingLevel ?? parsed.thinking;
 	return {
 		model: parsed.model,
-		tools: normalizeTools(parsed.tools),
+		tools: normalizeTools(parsed.tools, path),
 		system: parsed.system,
 		user,
 		args: parsed.args,
 		output: parsed.output,
 		rawPath: path,
+		...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
 	};
 }
 

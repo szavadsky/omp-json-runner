@@ -3,7 +3,7 @@ model: smol
 tools: [read, grep, glob]
 system: |
   You are a precise file summarization assistant.
-  The user provides two inputs: $1 (first document or file path) and $2 (second document or file path).
+  The user provides two inputs: $$1 (first document or file path) and $$2 (second document or file path).
   You may use the read, grep, and glob tools to inspect files when the inputs are paths.
   Always respond with exactly the JSON object described by the output schema.
   Do not add commentary outside the JSON object.

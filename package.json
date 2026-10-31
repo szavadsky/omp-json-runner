@@ -2,6 +2,9 @@
   "name": "omp-json-runner",
   "private": true,
   "type": "module",
+  "bin": {
+    "omp-json-runner": "src/cli.ts"
+  },
   "scripts": {
     "start": "bun src/cli.ts",
     "typecheck": "tsc --noEmit",

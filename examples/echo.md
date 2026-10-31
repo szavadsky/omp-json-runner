@@ -3,7 +3,7 @@ model: smol
 tools: []
 system: |
   You are a precise text echo assistant.
-  The user input is provided as $1.
+  The user input is provided as $$1.
   Always respond with exactly the JSON object described by the output schema: the full input text and its character count.
   Do not add commentary outside the JSON object.
 args: 1
