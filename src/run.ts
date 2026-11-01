@@ -104,9 +104,16 @@ function toImageParts(images: Array<{ data: string; mimeType: string }>): ImageC
 	return images.map(img => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
 }
 
-function userContent(text: string, images: ImageContent[]): string | (TextContent | ImageContent)[] {
-	if (images.length === 0) return text;
-	return [{ type: "text" as const, text }, ...images];
+type SubPart = { kind: "text"; text: string } | { kind: "image"; data: string; mimeType: string; label: string };
+
+/** Ordered parts → SDK content; pure-text collapses to a plain string (byte-identical legacy path). */
+function userContent(parts: SubPart[], fallbackText: string): string | (TextContent | ImageContent)[] {
+	if (!parts.some(p => p.kind === "image")) return fallbackText;
+	return parts.map(p =>
+		p.kind === "text"
+			? { type: "text" as const, text: p.text }
+			: { type: "image" as const, data: p.data, mimeType: p.mimeType },
+	);
 }
 
 // `anthropic-beta` token that gates Anthropic's structured-output `output_config.format`
@@ -330,15 +337,15 @@ async function runNoTools(args: {
 	candidates: RoleChainCandidate[];
 	modelRegistry: ModelRegistry;
 	system: string;
-	staticPrefix: string;
-	staticImages: ImageContent[];
+	staticParts: SubPart[];
+	staticText: string;
+	dynamicParts: SubPart[];
 	dynamicSuffix: string;
-	dynamicImages: ImageContent[];
 	outputSchema: unknown;
 	specThinking: ConfiguredThinkingLevel | undefined;
 	ctx: string;
 }): Promise<{ data: unknown; usage: Usage | undefined }> {
-	const { candidates, modelRegistry, system, staticPrefix, staticImages, dynamicSuffix, dynamicImages, outputSchema, specThinking, ctx } = args;
+	const { candidates, modelRegistry, system, staticParts, staticText, dynamicParts, dynamicSuffix, outputSchema, specThinking, ctx } = args;
 	if (candidates.length === 0) {
 		throw new Error(`${ctx}: cannot resolve model (no match, or no working credentials)`);
 	}
@@ -346,9 +353,9 @@ async function runNoTools(args: {
 	const context: Context = {
 		systemPrompt: [system],
 		messages: [
-			{ role: "user" as const, content: userContent(staticPrefix, staticImages), timestamp: Date.now() },
+			{ role: "user" as const, content: userContent(staticParts, staticText), timestamp: Date.now() },
 			...(dynamicSuffix
-				? [{ role: "user" as const, content: userContent(dynamicSuffix, dynamicImages), timestamp: Date.now() }]
+				? [{ role: "user" as const, content: userContent(dynamicParts, dynamicSuffix), timestamp: Date.now() }]
 				: []),
 		],
 	};
@@ -399,7 +406,7 @@ async function runNoTools(args: {
 					promptCacheKey: createHash("sha256")
 						.update(system)
 						.update("\0")
-						.update(staticPrefix)
+						.update(staticText)
 						.update("\0")
 						.update(`${model.provider}/${model.id}`)
 						.digest("hex"),
@@ -468,7 +475,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
 		? [rawSplit.staticPrefix, rawSplit.dynamicSuffix]
 		: [spec.user, ""];
 	const staticSub = substituteInputs(halves[0], inputs, slugs);
-	const dynamicSub = halves[1] ? substituteInputs(halves[1], inputs, slugs) : { text: "", images: [] };
+	const dynamicSub = halves[1] ? substituteInputs(halves[1], inputs, slugs) : { text: "", parts: [], images: [] };
 	const userText = rawSplit ? `${staticSub.text}\n\n${dynamicSub.text}` : staticSub.text;
 	if (!userText.trim()) {
 		throw new UsageError(`spec ${options.specPath}: user prompt is empty after substitution`);
@@ -513,10 +520,10 @@ export async function run(options: RunOptions): Promise<RunResult> {
 			candidates,
 			modelRegistry,
 			system: `${systemSub.text}\n\nRespond with a single JSON object matching this output schema. Do not wrap it in code fences:\n${JSON.stringify(spec.output)}`,
-			staticPrefix: rawSplit ? staticSub.text : userText,
-			staticImages: rawSplit ? staticImages : [...staticImages, ...dynamicImages],
+			staticParts: rawSplit ? staticSub.parts : [...staticSub.parts, ...(dynamicSub.parts.length > 0 ? [{ kind: "text", text: "\n\n" } as const, ...dynamicSub.parts] : [])],
+			staticText: rawSplit ? staticSub.text : userText,
+			dynamicParts: rawSplit ? dynamicSub.parts : [],
 			dynamicSuffix: rawSplit ? dynamicSub.text : "",
-			dynamicImages: rawSplit ? dynamicImages : [],
 			outputSchema: spec.output,
 			specThinking,
 			ctx,

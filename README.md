@@ -70,15 +70,17 @@ Body (and `system`) support four ref forms; `$$` escapes to a literal `$`:
 
 | Form | Meaning |
 |------|---------|
-| `$N` | Content of input N. Images inline as `[Image: label]` text + parts. |
+| `$N` | Content of input N. Images interleave AT the ref position (text, IMAGE, text — part order preserved on the wire). |
 | `...$N` | **Variadic**: inputs N..last, each a block joined by blank lines. |
 | `{slug}` | Content of the `slugs:`-named input, wrapped in `-- BEGIN slug --` / `-- END slug --` markers. A `{slug}` matching NO spec input passes through **verbatim** (JSON examples like `{"type": "object"}` need no escaping) — so avoid generic slugs like `type`. |
 | `...{slug}` | **Variadic from slug**: that input..last, each with its OWN slug markers. |
 
-Referencing `$k` with `k < 1` or `k > inputs.length` is an error. Each image
-is attached once per ref occurrence, in ref order (don't name the same image
-in both the label line and the ref). Example: `examples/vision.md`
-(images + slugs + variadic).
+Referencing `$k` with `k < 1` or `k > inputs.length` is an error. Ask for
+each image ONCE: every ref occurrence attaches the image again (plus a
+`[Image: label]` text marker). Images follow their ref's cache half (refs
+before the marker ride the static message). With tools, images attach
+trailing (session API limit) — the no-tools path interleaves exactly.
+Example: `examples/vision.md` (images + slugs + variadic).
 
 ### `CACHE_BOUNDARY`
 

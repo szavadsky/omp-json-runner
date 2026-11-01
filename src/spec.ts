@@ -116,12 +116,16 @@ export interface ResolvedInput {
 }
 
 /**
- * A substituted prompt segment: text plus the image parts referenced at that
- * position (in reference order). Callers assemble parts into the final user
- * content; text stays a single string for hashing/logging.
+ * A substituted prompt segment: ordered content parts. Text refs append to
+ * the running text part; each image ref flushes text and appends the image
+ * part AT THAT POSITION, so images interleave with surrounding text on the
+ * wire (all three provider families preserve part order). `text` is the
+ * joined text view (image refs render as `[Image: label]` lines) for
+ * hashing/logging and the tools path, which only takes trailing images.
  */
 export interface SubstitutedPrompt {
 	text: string;
+	parts: Array<{ kind: "text"; text: string } | { kind: "image"; data: string; mimeType: string; label: string }>;
 	images: Array<{ data: string; mimeType: string }>;
 }
 
@@ -142,28 +146,56 @@ export interface SubstitutedPrompt {
  */
 export function substituteInputs(text: string, inputs: ResolvedInput[], slugs: string[]): SubstitutedPrompt {
 	const images: Array<{ data: string; mimeType: string }> = [];
+	const parts: SubstitutedPrompt["parts"] = [];
+	let buf = "";
+	const pushText = (s: string) => {
+		buf += s;
+	};
+	const flush = () => {
+		if (buf) parts.push({ kind: "text", text: buf });
+		buf = "";
+	};
 	const refRe = /\$\$|\.\.\.(\$(\d+)|\{([A-Za-z0-9_-]+)\})|(\$(\d+)|\{([A-Za-z0-9_-]+)\})/g;
-	const out = text.replace(refRe, (m, _variadic, vNum, vSlug, _plain, pNum, pSlug) => {
-		if (m === "$$") return "$";
+	let last = 0;
+	let m: RegExpExecArray | null;
+	while ((m = refRe.exec(text)) !== null) {
+		pushText(text.slice(last, m.index));
+		last = m.index + m[0].length;
+		const [full, _variadic, vNum, vSlug, _plain, pNum, pSlug] = m;
+		if (full === "$$") {
+			pushText("$");
+			continue;
+		}
 		const variadic = _variadic !== undefined;
 		const num = vNum ?? pNum;
 		const slug = vSlug ?? pSlug;
-		if (slug !== undefined && !slugs.includes(slug)) return m; // unknown slug: verbatim
+		if (slug !== undefined && !slugs.includes(slug)) {
+			pushText(full); // unknown slug: verbatim
+			continue;
+		}
 		const start = num !== undefined ? Number(num) : slugIndex(slug, slugs, inputs.length);
 		if (!Number.isInteger(start) || start < 1 || start > inputs.length) {
 			throw new RangeError(`$${num ?? slug} out of range: spec takes ${inputs.length} input(s)`);
 		}
 		const end = variadic ? inputs.length : start;
-		const blocks: string[] = [];
 		for (let k = start; k <= end; k++) {
 			const input = inputs[k - 1];
-			if (input.image) images.push(input.image);
-			const body = input.kind === "image" ? `[Image: ${input.label}]` : (input.text ?? "");
-			blocks.push(slug !== undefined ? `-- BEGIN ${slugs[k - 1]} --\n${body}\n-- END ${slugs[k - 1]} --` : body);
+			if (k > start) pushText("\n\n");
+			if (slug !== undefined) pushText(`-- BEGIN ${slugs[k - 1]} --\n`);
+			if (input.image) {
+				flush();
+				parts.push({ kind: "image", data: input.image.data, mimeType: input.image.mimeType, label: input.label });
+				images.push(input.image);
+			} else {
+				pushText(input.text ?? "");
+			}
+			if (slug !== undefined) pushText(`\n-- END ${slugs[k - 1]} --`);
 		}
-		return blocks.join("\n\n");
-	});
-	return { text: out, images };
+	}
+	pushText(text.slice(last));
+	flush();
+	const flat = parts.map(p => (p.kind === "text" ? p.text : `[Image: ${p.label}]`)).join("");
+	return { text: flat, parts, images };
 }
 
 function slugIndex(slug: string, slugs: string[], count: number): number {
