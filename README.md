@@ -94,13 +94,14 @@ bun src/cli.ts [--model <pattern>] <spec.md> <out.json> <input1> [<input2> ...]
 - Writes one telemetry line to stderr per run:
   `omp-json-runner usage {"input":N,"output":N,"cacheRead":N,"cacheWrite":N}`
   (best-effort token counts; `0` when unavailable).
-- Exit codes: `0` success (final JSON on stdout), `2` usage error
-  (unknown flags, fewer than 3 positional args, or `--help` prints usage), `1` run failure
-  (message to stderr).
+- Exit codes: `0` success (final JSON on stdout) or `--help` (prints usage),
+  `2` usage error (unknown flags, fewer than 3 positional args),
+  `1` run failure (message to stderr).
 
 ### Consensus / ensemble example
 
-Run the same spec across multiple models and merge or compare the outputs:
+Run the same spec across multiple models (or 3x on one model), then merge
+the outputs — e.g. union the fix-ids for recall, majority-vote the grade:
 
 ```sh
 # Run 1: Gemini 3.8 Flash
@@ -110,6 +111,10 @@ bun src/cli.ts --model google-antigravity/gemini-3.8-flash:high \
 # Run 2: OpenCode Beam
 bun src/cli.ts --model opencode-go/beam-free:auto \
   examples/echo.md /tmp/echo-beam.json examples/inputs/hello.txt
+
+# Merge: fix-id union (recall) + grade majority vote, e.g. with jq/python:
+#   union = set(run1.fixes[].id) | set(run2.fixes[].id)
+#   grade = majority(run1.grade, run2.grade, run3.grade)
 ```
 ## Tools / yield semantics
 
