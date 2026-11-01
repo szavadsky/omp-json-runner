@@ -52,15 +52,33 @@ Frontmatter keys:
 |----------|----------|--------------------------------------------------------------------------------------------------|
 | `model`  | yes      | Model pattern/alias resolved via omp `Settings`: bare role names (`smol`, `haiku`), `@`-prefixed aliases (`@smol`), or full `provider/model` patterns (`anthropic/claude-haiku-4-5`). |
 | `tools`  | no       | Allowed tools: CSV string, string array, or `null`. Default `[]` = **no tools** (note: this differs from the omp agent default, which enables tools). Names are normalized like omp (`read`, `grep`, `glob`, …) and rejected if unknown. |
-| `system` | yes      | System prompt string. Supports `$N` substitution like the body.                                  |
+| `system` | yes      | System prompt string. Supports `$N`/`{slug}` substitution like the body (text only — an image ref here is a usage error). |
 | `args`   | yes      | Integer ≥ 1: how many file inputs the spec takes. CLI must pass exactly this many.               |
+| `slugs`  | no       | Array of `args` names (`[A-Za-z0-9_-]+`, unique) enabling `{slug}` refs; default `input1..inputN`. |
 | `output` | yes      | JSON Schema (object) the model's final JSON is validated against. Keys are kept verbatim (no kebab→camel normalization). |
 | `thinking` / `thinkingLevel` | no | Optional thinking-level hint string (e.g. `high`); `thinkingLevel` wins when both are set. |
 
-Body = the **user prompt** (required, non-empty). It also supports `$N`
-substitution: `$1`..`$N` are replaced with the contents of input files;
-`$$` escapes to a literal `$`. Referencing `$k` with `k < 1` or
-`k > inputs.length` is an error.
+## Inputs & template refs
+
+Each CLI input file is auto-detected: **images** (png/jpeg/gif/webp by magic
+bytes, svg/svgz rasterized; loaded through the SDK vision pipeline with
+auto-resize) become native image parts; everything else is read as UTF-8
+**text**. The model must support vision (`model.input` includes `image`)
+when any input is an image.
+
+Body (and `system`) support four ref forms; `$$` escapes to a literal `$`:
+
+| Form | Meaning |
+|------|---------|
+| `$N` | Content of input N. Images inline as `[Image: label]` text + parts. |
+| `...$N` | **Variadic**: inputs N..last, each a block joined by blank lines. |
+| `{slug}` | Content of the `slugs:`-named input, wrapped in `-- BEGIN slug --` / `-- END slug --` markers. A `{slug}` matching NO spec input passes through **verbatim** (JSON examples like `{"type": "object"}` need no escaping) — so avoid generic slugs like `type`. |
+| `...{slug}` | **Variadic from slug**: that input..last, each with its OWN slug markers. |
+
+Referencing `$k` with `k < 1` or `k > inputs.length` is an error. Each image
+is attached once per ref occurrence, in ref order (don't name the same image
+in both the label line and the ref). Example: `examples/vision.md`
+(images + slugs + variadic).
 
 ### `CACHE_BOUNDARY`
 
@@ -82,7 +100,8 @@ Without the marker the whole prompt is sent as one user message.
 bun src/cli.ts [--model <pattern>] <spec.md> <out.json> <input1> [<input2> ...]
 ```
 
-- Reads each input file as UTF-8 text, substitutes `$N` into `system` and the
+- Reads each input file (text as UTF-8, images as native vision parts —
+  see "Inputs & template refs"), substitutes refs into `system` and the
   user prompt, runs the agent, validates the final JSON against the spec's
   `output` schema, writes pretty-printed JSON to `<out.json>`, and also
   prints it to stdout.

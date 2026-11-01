@@ -8,11 +8,15 @@ import {
 	type ApiKey,
 	type AssistantMessage,
 	type Context,
+	type ImageContent,
 	type Model,
 	type SimpleStreamOptions,
+	type TextContent,
 } from "@oh-my-pi/pi-ai";
 import type { Usage } from "@oh-my-pi/pi-catalog/types";
 import { markPerCallContextMessage } from "@oh-my-pi/pi-ai/utils/block-symbols";
+import { loadImageInput, loadSvgImageInput } from "@oh-my-pi/pi-coding-agent/utils/image-loading";
+import { readImageMetadata } from "@oh-my-pi/pi-utils";
 import {
 	type CreateAgentSessionOptions,
 	createAgentSession,
@@ -39,7 +43,7 @@ import {
 	shouldDisableReasoning,
 	toReasoningEffort,
 } from "@oh-my-pi/pi-tui/thinking";
-import { loadSpec, splitCacheBoundary, substituteVars } from "./spec.js";
+import { loadSpec, splitCacheBoundary, substituteInputs, type ResolvedInput } from "./spec.js";
 
 export class UsageError extends Error {
 	override name = "UsageError";
@@ -63,6 +67,47 @@ export interface RunResult {
 
 const REMINDER =
 	"You stopped without calling yield. Call yield now with the final JSON matching the output schema.";
+
+/** Detect image files by magic bytes (SDK metadata reader) + SVG extension; everything else is text. */
+async function resolveInputs(
+	specPath: string,
+	inputPaths: string[],
+	slugs: string[],
+	cwd: string,
+): Promise<ResolvedInput[]> {
+	return await Promise.all(
+		inputPaths.map(async (inputPath, i) => {
+			const label = slugs[i] !== `input${i + 1}` ? slugs[i] : path.basename(inputPath);
+			try {
+				const ext = path.extname(inputPath).toLowerCase();
+				if (ext === ".svg" || ext === ".svgz") {
+					const loaded = await loadSvgImageInput({ path: inputPath, cwd, autoResize: true });
+					if (loaded) return { kind: "image", label, image: { data: loaded.data, mimeType: loaded.mimeType } } as ResolvedInput;
+				} else {
+					const meta = await readImageMetadata(inputPath).catch(() => null);
+					if (meta?.mimeType) {
+						const loaded = await loadImageInput({ path: inputPath, cwd, autoResize: true });
+						if (loaded) return { kind: "image", label, image: { data: loaded.data, mimeType: loaded.mimeType } } as ResolvedInput;
+					}
+				}
+				return { kind: "text", label, text: await Bun.file(inputPath).text() } as ResolvedInput;
+			} catch (error) {
+				throw new Error(
+					`spec ${specPath}: cannot read input ${inputPath}: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}),
+	);
+}
+
+function toImageParts(images: Array<{ data: string; mimeType: string }>): ImageContent[] {
+	return images.map(img => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
+}
+
+function userContent(text: string, images: ImageContent[]): string | (TextContent | ImageContent)[] {
+	if (images.length === 0) return text;
+	return [{ type: "text" as const, text }, ...images];
+}
 
 // `anthropic-beta` token that gates Anthropic's structured-output `output_config.format`
 // (exported as `structuredOutputsBeta` from pi-ai's anthropic-headers module, which lives
@@ -286,12 +331,14 @@ async function runNoTools(args: {
 	modelRegistry: ModelRegistry;
 	system: string;
 	staticPrefix: string;
+	staticImages: ImageContent[];
 	dynamicSuffix: string;
+	dynamicImages: ImageContent[];
 	outputSchema: unknown;
 	specThinking: ConfiguredThinkingLevel | undefined;
 	ctx: string;
 }): Promise<{ data: unknown; usage: Usage | undefined }> {
-	const { candidates, modelRegistry, system, staticPrefix, dynamicSuffix, outputSchema, specThinking, ctx } = args;
+	const { candidates, modelRegistry, system, staticPrefix, staticImages, dynamicSuffix, dynamicImages, outputSchema, specThinking, ctx } = args;
 	if (candidates.length === 0) {
 		throw new Error(`${ctx}: cannot resolve model (no match, or no working credentials)`);
 	}
@@ -299,9 +346,9 @@ async function runNoTools(args: {
 	const context: Context = {
 		systemPrompt: [system],
 		messages: [
-			{ role: "user" as const, content: staticPrefix, timestamp: Date.now() },
+			{ role: "user" as const, content: userContent(staticPrefix, staticImages), timestamp: Date.now() },
 			...(dynamicSuffix
-				? [{ role: "user" as const, content: dynamicSuffix, timestamp: Date.now() }]
+				? [{ role: "user" as const, content: userContent(dynamicSuffix, dynamicImages), timestamp: Date.now() }]
 				: []),
 		],
 	};
@@ -410,28 +457,31 @@ export async function run(options: RunOptions): Promise<RunResult> {
 			`spec ${options.specPath}: expected ${spec.args} input(s), got ${options.inputPaths.length}`,
 		);
 	}
-	const inputs = await Promise.all(
-		options.inputPaths.map(async inputPath => {
-			try {
-				return await Bun.file(inputPath).text();
-			} catch (error) {
-				throw new Error(
-					`spec ${options.specPath}: cannot read input ${inputPath}: ${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
-		}),
-	);
-	const system = substituteVars(spec.system, inputs);
-	// Split on the RAW template so a `$$`-escaped marker from an input cannot act as the
-	// boundary; trim halves before substitution so input edge whitespace is preserved.
+	const slugs = options.inputPaths.map((_, i) => spec.slugs?.[i] ?? `input${i + 1}`);
+	const inputs = await resolveInputs(options.specPath, options.inputPaths, slugs, cwd);
+	const systemSub = substituteInputs(spec.system, inputs, slugs);
+	// Boundary split on the RAW template so a `$$`-escaped marker from an input
+	// cannot act as the boundary; trim halves before substitution so input edge
+	// whitespace is preserved.
 	const rawSplit = splitCacheBoundary(spec.user);
 	const halves = rawSplit
 		? [rawSplit.staticPrefix, rawSplit.dynamicSuffix]
 		: [spec.user, ""];
-	const [staticPrefix, dynamicSuffix] = [substituteVars(halves[0], inputs), halves[1] ? substituteVars(halves[1], inputs) : ""];
-	const userText = rawSplit ? `${staticPrefix}\n\n${dynamicSuffix}` : staticPrefix;
+	const staticSub = substituteInputs(halves[0], inputs, slugs);
+	const dynamicSub = halves[1] ? substituteInputs(halves[1], inputs, slugs) : { text: "", images: [] };
+	const userText = rawSplit ? `${staticSub.text}\n\n${dynamicSub.text}` : staticSub.text;
 	if (!userText.trim()) {
 		throw new UsageError(`spec ${options.specPath}: user prompt is empty after substitution`);
+	}
+	const systemImages = toImageParts(systemSub.images);
+	const staticImages = toImageParts(staticSub.images);
+	const dynamicImages = toImageParts(dynamicSub.images);
+	// System refs are text-only: images stay in their user-half homes; a
+	// hypothetical system-$N image ref surfaces here instead of vanishing.
+	if (systemImages.length > 0) {
+		throw new UsageError(
+			`spec ${options.specPath}: system prompt references an image input; images are only supported in the user prompt body`,
+		);
 	}
 
 	const specThinking = parseConfiguredThinkingLevel(spec.thinkingLevel ?? null) ?? undefined;
@@ -462,9 +512,11 @@ export async function run(options: RunOptions): Promise<RunResult> {
 		const { data, usage } = await runNoTools({
 			candidates,
 			modelRegistry,
-			system: `${system}\n\nRespond with a single JSON object matching this output schema. Do not wrap it in code fences:\n${JSON.stringify(spec.output)}`,
-			staticPrefix: rawSplit ? staticPrefix : userText,
-			dynamicSuffix: rawSplit ? dynamicSuffix : "",
+			system: `${systemSub.text}\n\nRespond with a single JSON object matching this output schema. Do not wrap it in code fences:\n${JSON.stringify(spec.output)}`,
+			staticPrefix: rawSplit ? staticSub.text : userText,
+			staticImages: rawSplit ? staticImages : [...staticImages, ...dynamicImages],
+			dynamicSuffix: rawSplit ? dynamicSub.text : "",
+			dynamicImages: rawSplit ? dynamicImages : [],
 			outputSchema: spec.output,
 			specThinking,
 			ctx,
@@ -482,8 +534,9 @@ export async function run(options: RunOptions): Promise<RunResult> {
 		outPath: options.outPath,
 		specPath: options.specPath,
 		specModel: spec.model,
-		system,
+		system: systemSub.text,
 		userText,
+		images: [...staticImages, ...dynamicImages],
 		outputSchema: spec.output,
 		toolNames: spec.tools,
 		modelLabel,
@@ -502,6 +555,7 @@ async function runWithTools(args: {
 	specModel: string;
 	system: string;
 	userText: string;
+	images: ImageContent[];
 	outputSchema: unknown;
 	toolNames: string[];
 	modelLabel: string;
@@ -581,6 +635,7 @@ async function runWithTools(args: {
 				runCommands: false,
 				expandPromptTemplates: false,
 				throwOnDrop: true,
+				...(args.images.length > 0 ? { images: args.images } : {}),
 			});
 		} catch (error) {
 			throw new Error(

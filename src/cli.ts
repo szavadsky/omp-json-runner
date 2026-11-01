@@ -8,7 +8,11 @@ const HELP = `${USAGE}
 Arguments:
   <spec.md>            Path to spec file with YAML frontmatter
   <out.json>           Destination for validated JSON output
-  <input1> ...         Input file paths (count must match spec 'args')
+  <input1> ...         Input file paths: text (UTF-8) or images
+                       (png/jpg/gif/webp by magic bytes, svg/svgz by
+                       extension). Count must match spec 'args'.
+                       Template refs: $N, ...$N (variadic), {slug} and
+                       ...{slug} (spec 'slugs:' names, BEGIN/END-marked).
 
 Options:
   --model <pattern>    Override model specified in spec frontmatter
