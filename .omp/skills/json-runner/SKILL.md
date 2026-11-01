@@ -30,6 +30,7 @@ Markdown with YAML frontmatter plus a body:
 - `args:` N — the CLI must pass exactly N input files
 - `output:` JSON Schema the final JSON is validated against
 - body: user prompt; `$1..$N` expand to input file contents (`$$` escapes)
+- images supported: any input may be png/jpg/gif/webp/svg — auto-detected, interleaved at the ref position (`$N`, `...$N` variadic, `{slug}` BEGIN/END-marked via `slugs:`)
 
 Put shared instructions and reference material before the
 `<!-- CACHE_BOUNDARY -->` line and the `$N` inputs after it: the runner
