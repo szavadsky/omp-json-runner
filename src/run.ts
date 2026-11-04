@@ -55,12 +55,14 @@ export interface RunOptions {
 	inputPaths: string[];
 	cwd?: string;
 	modelOverride?: string;
+	noFallback?: boolean;
 }
 
 export interface RunResult {
 	data: unknown;
 	outPath: string;
 	model: string;
+	servedModel?: string;
 	yieldCalls: number;
 	reminderTurns: number;
 }
@@ -157,15 +159,16 @@ function validateData(outputSchema: unknown, data: unknown, ctx: string): unknow
 	return normalized;
 }
 
-function usageLine(usage: Partial<Usage> | undefined): void {
+function usageLine(usage: Partial<Usage> | undefined, model?: string): void {
 	const num = (value: unknown): number =>
 		typeof value === "number" && Number.isFinite(value) ? value : 0;
-	const line = {
+	const line: Record<string, unknown> = {
 		input: num(usage?.input),
 		output: num(usage?.output),
 		cacheRead: num(usage?.cacheRead),
 		cacheWrite: num(usage?.cacheWrite),
 	};
+	if (model) line.model = model;
 	process.stderr.write(`omp-json-runner usage ${JSON.stringify(line)}\n`);
 }
 
@@ -272,6 +275,12 @@ function jsonSchemaToGoogleSchema(schema: unknown): unknown {
 	for (const [key, value] of Object.entries(input)) {
 		if (key === "$schema" || key === "$id" || key === "$defs" || key === "definitions") continue;
 		if (key === "additionalProperties" && typeof value !== "boolean") continue;
+		if (key === "type" && Array.isArray(value)) {
+			const nonNull = value.filter(t => t !== "null");
+			output["type"] = nonNull[0] ?? "string";
+			if (value.includes("null")) output["nullable"] = true;
+			continue;
+		}
 		output[key] = jsonSchemaToGoogleSchema(value);
 	}
 	return output;
@@ -344,7 +353,7 @@ async function runNoTools(args: {
 	outputSchema: unknown;
 	specThinking: ConfiguredThinkingLevel | undefined;
 	ctx: string;
-}): Promise<{ data: unknown; usage: Usage | undefined }> {
+}): Promise<{ data: unknown; usage: Usage | undefined; servedModel: string }> {
 	const { candidates, modelRegistry, system, staticParts, staticText, dynamicParts, dynamicSuffix, outputSchema, specThinking, ctx } = args;
 	if (candidates.length === 0) {
 		throw new Error(`${ctx}: cannot resolve model (no match, or no working credentials)`);
@@ -444,7 +453,7 @@ async function runNoTools(args: {
 			lastError = `${candidateCtx}: response is not valid JSON: ${error instanceof Error ? error.message : String(error)}`;
 			continue;
 		}
-		return { data: validateData(outputSchema, data, candidateCtx), usage: message.usage };
+		return { data: validateData(outputSchema, data, candidateCtx), usage: message.usage, servedModel: `${message.provider}/${message.model}` };
 	}
 	throw new Error(lastError ?? `${ctx}: completion failed`);
 }
@@ -504,7 +513,8 @@ export async function run(options: RunOptions): Promise<RunResult> {
 		);
 	}
 
-	const candidates = resolveCandidates(spec.model, settings, modelRegistry);
+	const allCandidates = resolveCandidates(spec.model, settings, modelRegistry);
+	const candidates = options.noFallback ? allCandidates.slice(0, 1) : allCandidates;
 	if (candidates.length === 0) {
 		throw new Error(
 			`${contextOf(options.specPath, spec.model)}: cannot resolve model (no match, or no working credentials)`,
@@ -516,7 +526,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
 	const thinkingLevel = candidates[0].thinkingLevel ?? specThinking;
 
 	if (spec.tools.length === 0) {
-		const { data, usage } = await runNoTools({
+		const { data, usage, servedModel } = await runNoTools({
 			candidates,
 			modelRegistry,
 			system: `${systemSub.text}\n\nRespond with a single JSON object matching this output schema. Do not wrap it in code fences:\n${JSON.stringify(spec.output)}`,
@@ -528,9 +538,9 @@ export async function run(options: RunOptions): Promise<RunResult> {
 			specThinking,
 			ctx,
 		});
-		usageLine(usage);
+		usageLine(usage, servedModel);
 		await writeOut(options.outPath, data);
-		return { data, outPath: options.outPath, model: modelLabel, yieldCalls: 0, reminderTurns: 0 };
+		return { data, outPath: options.outPath, model: modelLabel, servedModel, yieldCalls: 0, reminderTurns: 0 };
 	}
 
 	return await runWithTools({
@@ -694,9 +704,9 @@ async function runWithTools(args: {
 		} catch {
 			usage = undefined;
 		}
-		usageLine(usage);
+		usageLine(usage, args.modelLabel);
 		await writeOut(args.outPath, data);
-		return { data, outPath: args.outPath, model: args.modelLabel, yieldCalls, reminderTurns };
+		return { data, outPath: args.outPath, model: args.modelLabel, servedModel: args.modelLabel, yieldCalls, reminderTurns };
 	} finally {
 		unsubscribe();
 		await session.dispose().catch(() => {});

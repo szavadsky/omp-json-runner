@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { run, UsageError } from "./run.js";
 
-const USAGE = "usage: bun src/cli.ts [--model <pattern>] <spec.md> <out.json> <input1> [<input2>...]";
+const USAGE = "usage: bun src/cli.ts [--model <pattern>] [--no-fallback] <spec.md> <out.json> <input1> [<input2>...]";
 
 const HELP = `${USAGE}
 
@@ -16,12 +16,14 @@ Arguments:
 
 Options:
   --model <pattern>    Override model specified in spec frontmatter
+  --no-fallback        Only try the primary model; fail instead of walking the role chain
   -h, --help           Show this help message
 `;
 
 const argv = process.argv.slice(2);
 
 let modelOverride: string | undefined;
+let noFallback = false;
 let i = 0;
 while (i < argv.length) {
   const arg = argv[i];
@@ -51,6 +53,11 @@ while (i < argv.length) {
     i++;
     continue;
   }
+  if (arg === "--no-fallback") {
+    noFallback = true;
+    i++;
+    continue;
+  }
   if (arg === "--") {
     i++;
     break;
@@ -73,7 +80,7 @@ if (positionalArgs.length < 3) {
 const [specPath, outPath, ...inputPaths] = positionalArgs as [string, string, ...string[]];
 
 try {
-  const result = await run({ specPath, outPath, inputPaths, modelOverride });
+  const result = await run({ specPath, outPath, inputPaths, modelOverride, noFallback });
   console.log(JSON.stringify(result.data));
   process.exit(0);
 } catch (err) {
